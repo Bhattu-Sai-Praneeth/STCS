@@ -1,50 +1,69 @@
-// net.hpp -- thin RAII and error-checking wrappers around POSIX sockets.
-//
-// The raw calls (socket, bind, listen, accept, connect, send, recv, close)
-// stay visible in server/server.cpp and client/connection.cpp; this header
-// only holds the pieces that both programs need and that are easy to get
-// wrong: closing a descriptor exactly once, and send() writing less than
-// requested.
-#pragma once
+#include "shared/net.hpp"
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
-#include <cstddef>
-#include <string>
+#include <cerrno>
+#include <csignal>
+#include <cstring>
 
 namespace stcs {
 
-// Owns a file descriptor and closes it in the destructor (move-only).
-class Socket {
-public:
-    Socket() = default;
-    explicit Socket(int fd) : fd_(fd) {}
-    Socket(const Socket&) = delete;
-    Socket& operator=(const Socket&) = delete;
-    Socket(Socket&& other) noexcept : fd_(other.release()) {}
-    Socket& operator=(Socket&& other) noexcept;
-    ~Socket() { close_now(); }
+Socket& Socket::operator=(Socket&& other) noexcept {
+    if (this != &other) {
+        close_now();
+        fd_ = other.release();
+    }
+    return *this;
+}
 
-    int fd() const { return fd_; }
-    bool valid() const { return fd_ >= 0; }
-    int release();        // gives up ownership without closing
-    void close_now();     // closes immediately (safe to call twice)
+int Socket::release() {
+    const int fd = fd_;
+    fd_ = -1;
+    return fd;
+}
 
-private:
-    int fd_ = -1;
-};
+void Socket::close_now() {
+    if (fd_ >= 0) {
+        ::close(fd_);
+        fd_ = -1;
+    }
+}
 
-// send() may accept fewer bytes than requested. This loops until every byte
-// has been handed to the kernel, retrying on EINTR. Returns false and fills
-// `error` (strerror text) if the peer is gone or another error occurs.
-bool send_all(int fd, const char* data, std::size_t length, std::string& error);
-bool send_all(int fd, const std::string& data, std::string& error);
+bool send_all(int fd, const char* data, std::size_t length, std::string& error) {
+    std::size_t sent_total = 0;
+    while (sent_total < length) {
+        int flags = 0;
+#ifdef MSG_NOSIGNAL
+        flags |= MSG_NOSIGNAL;
+#endif
+        const ssize_t sent = ::send(fd, data + sent_total, length - sent_total, flags);
+        if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            error = std::strerror(errno);
+            return false;
+        }
+        sent_total += static_cast<std::size_t>(sent);
+    }
+    return true;
+}
 
-// "a.b.c.d:port" for log lines.
-std::string format_peer_address(const sockaddr_in& address);
+bool send_all(int fd, const std::string& data, std::string& error) {
+    return send_all(fd, data.data(), data.size(), error);
+}
 
-// Ignores SIGPIPE so that writing to a closed socket returns EPIPE instead of
-// killing the process.
-void ignore_sigpipe();
+std::string format_peer_address(const struct sockaddr_in& address) {
+    char text[INET_ADDRSTRLEN] = {0};
+    ::inet_ntop(AF_INET, &address.sin_addr, text, sizeof text);
+    return std::string(text) + ":" + std::to_string(ntohs(address.sin_port));
+}
 
-}  // namespace stcs
+void ignore_sigpipe() {
+    std::signal(SIGPIPE, SIG_IGN);
+}
+
+}

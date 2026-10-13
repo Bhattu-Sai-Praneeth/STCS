@@ -1,70 +1,70 @@
-// framing.hpp -- newline framing for the TCP byte stream (Phase 1, section 7.1).
-//
-// TCP delivers a stream of bytes, not messages. MessageFramer sits between
-// recv() and the protocol layer: the caller feeds it whatever chunk recv()
-// returned (1 byte, 4096 bytes, half a message, three messages...) and then
-// pulls out complete frames one at a time.
-//
-// The framer touches no socket, uses no clock and never sleeps, so it can be
-// unit-tested with arbitrary byte chunks (NFR-13).
-//
-// Rules implemented (Phase 1, 7.1 / 7.2):
-//   * one message = bytes up to (not including) a '\n'
-//   * a single trailing '\r' is stripped
-//   * an empty line is reported as Blank (caller answers INVALID_MESSAGE)
-//   * a line longer than the limit is reported ONCE as TooLarge and every
-//     byte up to the next '\n' is discarded (resynchronisation)
-//   * incomplete data stays buffered until its '\n' arrives
-//   * the internal buffer never holds more than `max_line` bytes of
-//     unterminated data, so a peer cannot make it grow without bound
-#pragma once
+#include "shared/framing.hpp"
 
-#include <cstddef>
-#include <string>
+#include <stdexcept>
 
 namespace stcs {
 
-enum class FrameStatus {
-    Message,   // `line` holds one complete line (without the delimiter)
-    Blank,     // the peer sent an empty line
-    TooLarge,  // the line exceeded the limit; its bytes are being discarded
-};
+MessageFramer::MessageFramer(std::size_t max_line) : max_line_(max_line) {}
 
-struct Frame {
-    FrameStatus status = FrameStatus::Message;
-    std::string line;
-};
+void MessageFramer::feed(const char* data, std::size_t length) {
+    buffer_.append(data, length);
+}
 
-class MessageFramer {
-public:
-    // `max_line` is the largest accepted line length in bytes, excluding the
-    // '\n' delimiter. The server uses 8192 (requests); the client uses a
-    // larger value for responses -- see protocol.hpp.
-    explicit MessageFramer(std::size_t max_line);
+bool MessageFramer::next_frame(Frame& out) {
+    while (true) {
+        const std::size_t newline = buffer_.find('\n');
 
-    // Appends bytes exactly as returned by recv().
-    void feed(const char* data, std::size_t length);
+        if (discarding_) {
+            if (newline == std::string::npos) {
+                buffer_.clear();
+                return false;
+            }
+            buffer_.erase(0, newline + 1);
+            discarding_ = false;
+            continue;
+        }
 
-    // Extracts the next complete frame. Returns false when more bytes are
-    // needed. Call repeatedly after every feed() until it returns false:
-    // one recv() can complete several messages.
-    bool next_frame(Frame& out);
+        if (newline == std::string::npos) {
+            if (buffer_.size() > max_line_) {
+                buffer_.clear();
+                discarding_ = true;
+                out.status = FrameStatus::TooLarge;
+                out.line.clear();
+                return true;
+            }
+            return false;
+        }
 
-    // Bytes currently held that do not yet form a complete line.
-    std::size_t buffered_bytes() const { return buffer_.size(); }
+        if (newline > max_line_) {
+            buffer_.erase(0, newline + 1);
+            out.status = FrameStatus::TooLarge;
+            out.line.clear();
+            return true;
+        }
 
-    // True while the tail of an oversized line is being thrown away.
-    bool discarding() const { return discarding_; }
+        std::string line = buffer_.substr(0, newline);
+        buffer_.erase(0, newline + 1);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            out.status = FrameStatus::Blank;
+            out.line.clear();
+        } else {
+            out.status = FrameStatus::Message;
+            out.line = std::move(line);
+        }
+        return true;
+    }
+}
 
-private:
-    std::size_t max_line_;
-    std::string buffer_;
-    bool discarding_ = false;
-};
+std::string frame_message(const std::string& json_text) {
+    if (json_text.find('\n') != std::string::npos) {
+        throw std::logic_error("framed message must not contain a raw newline");
+    }
+    std::string framed = json_text;
+    framed.push_back('\n');
+    return framed;
+}
 
-// Serialises one logical message: the JSON text plus exactly one '\n'.
-// Throws std::logic_error if the text already contains a raw newline (the
-// JSON serializer never produces one; this is a safety net).
-std::string frame_message(const std::string& json_text);
-
-}  // namespace stcs
+}

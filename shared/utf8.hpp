@@ -1,37 +1,114 @@
-// utf8.hpp -- minimal UTF-8 helpers shared by the STCS client and server.
-//
-// STCS messages are UTF-8 (Phase 1, section 7.2). These helpers let the JSON
-// parser and the field validators reject malformed byte sequences instead of
-// trusting the peer.
-#pragma once
-
-#include <cstddef>
-#include <cstdint>
-#include <string>
+#include "shared/utf8.hpp"
 
 namespace stcs {
 
-// Decodes one code point that starts at s[pos]. On success the code point is
-// stored in `code_point`, `pos` is advanced past it and true is returned.
-// Returns false (leaving pos unchanged) for truncated, overlong, surrogate or
-// out-of-range sequences.
-bool decode_utf8(const std::string& s, std::size_t& pos, std::uint32_t& code_point);
+bool decode_utf8(const std::string& s, std::size_t& pos, std::uint32_t& code_point) {
+    if (pos >= s.size()) {
+        return false;
+    }
+    const unsigned char lead = static_cast<unsigned char>(s[pos]);
+    if (lead < 0x80) {
+        code_point = lead;
+        pos += 1;
+        return true;
+    }
 
-// True if every byte of `s` belongs to a well-formed UTF-8 sequence.
-bool is_valid_utf8(const std::string& s);
+    std::size_t length = 0;
+    std::uint32_t value = 0;
+    std::uint32_t smallest_allowed = 0;
+    if ((lead & 0xE0) == 0xC0) {
+        length = 2;
+        value = lead & 0x1F;
+        smallest_allowed = 0x80;
+    } else if ((lead & 0xF0) == 0xE0) {
+        length = 3;
+        value = lead & 0x0F;
+        smallest_allowed = 0x800;
+    } else if ((lead & 0xF8) == 0xF0) {
+        length = 4;
+        value = lead & 0x07;
+        smallest_allowed = 0x10000;
+    } else {
+        return false;
+    }
 
-// Number of code points in `s` ("characters" in the Phase 1 length rules).
-// The string must already be valid UTF-8.
-std::size_t utf8_length(const std::string& s);
+    if (pos + length > s.size()) {
+        return false;
+    }
+    for (std::size_t i = 1; i < length; ++i) {
+        const unsigned char continuation = static_cast<unsigned char>(s[pos + i]);
+        if ((continuation & 0xC0) != 0x80) {
+            return false;
+        }
+        value = (value << 6) | (continuation & 0x3F);
+    }
 
-// Appends the UTF-8 encoding of `code_point` to `out`.
-void append_utf8(std::string& out, std::uint32_t code_point);
+    const bool is_surrogate = value >= 0xD800 && value <= 0xDFFF;
+    if (value < smallest_allowed || value > 0x10FFFF || is_surrogate) {
+        return false;
+    }
+    code_point = value;
+    pos += length;
+    return true;
+}
 
-// Returns at most `max_chars` code points of `s`, never cutting a multi-byte
-// sequence in half (so the result is still valid UTF-8 when `s` is).
-std::string utf8_truncate(const std::string& s, std::size_t max_chars);
+bool is_valid_utf8(const std::string& s) {
+    std::size_t pos = 0;
+    std::uint32_t ignored = 0;
+    while (pos < s.size()) {
+        if (!decode_utf8(s, pos, ignored)) {
+            return false;
+        }
+    }
+    return true;
+}
 
-// C0 controls (U+0000-U+001F), DEL (U+007F) and C1 controls (U+0080-U+009F).
-bool is_control_code_point(std::uint32_t code_point);
+std::size_t utf8_length(const std::string& s) {
+    std::size_t pos = 0;
+    std::size_t count = 0;
+    std::uint32_t ignored = 0;
+    while (pos < s.size()) {
+        if (!decode_utf8(s, pos, ignored)) {
+            ++pos;
+        }
+        ++count;
+    }
+    return count;
+}
 
-}  // namespace stcs
+void append_utf8(std::string& out, std::uint32_t code_point) {
+    if (code_point < 0x80) {
+        out.push_back(static_cast<char>(code_point));
+    } else if (code_point < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (code_point >> 6)));
+        out.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+    } else if (code_point < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (code_point >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (code_point >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+    }
+}
+
+std::string utf8_truncate(const std::string& s, std::size_t max_chars) {
+    std::size_t pos = 0;
+    std::size_t count = 0;
+    std::uint32_t ignored = 0;
+    while (pos < s.size() && count < max_chars) {
+        if (!decode_utf8(s, pos, ignored)) {
+            break;
+        }
+        ++count;
+    }
+    return s.substr(0, pos);
+}
+
+bool is_control_code_point(std::uint32_t code_point) {
+    return code_point < 0x20 || (code_point >= 0x7F && code_point <= 0x9F);
+}
+
+}

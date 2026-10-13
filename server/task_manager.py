@@ -1,70 +1,40 @@
-"""Thread-safe task state. This is the ONLY module that acquires task_lock."""
-import threading
-from dataclasses import dataclass, asdict
+import json
+import socket
+from shared.framing import FrameBuffer, send_all
+from shared.protocol import build_response, parse_envelope
+from server.validator import validate_envelope
 
 
-@dataclass
-class Task:
-    task_id: int
-    title: str
-    owner: str | None = None
-    status: str = "OPEN"
+class Session:
+    def __init__(self, sock: socket.socket, application, logger) -> None:
+        self.sock = sock
+        self.application = application
+        self.logger = logger
 
-
-class TaskManager:
-    def __init__(self) -> None:
-        self.tasks: dict[int, Task] = {}
-        self.next_id = 1
-        self.task_lock = threading.RLock()
-
-    def create(self, title: str) -> dict:
-        with self.task_lock:
-            task = Task(self.next_id, title)
-            self.tasks[task.task_id] = task
-            self.next_id += 1
-            return asdict(task)
-
-    def list(self) -> list[dict]:
-        with self.task_lock:
-            return [asdict(t) for t in self.tasks.values()]
-
-    def get(self, task_id: int) -> dict | None:
-        with self.task_lock:
-            task = self.tasks.get(task_id)
-            return asdict(task) if task else None
-
-    def claim(self, task_id: int, user: str) -> dict:
-        with self.task_lock:
-            task = self.tasks.get(task_id)
-            if not task:
-                raise KeyError("NOT_FOUND")
-            if task.status != "OPEN":
-                raise RuntimeError("CONFLICT")
-            task.owner = user
-            task.status = "CLAIMED"
-            return asdict(task)
-
-    def release(self, task_id: int, user: str) -> dict:
-        with self.task_lock:
-            task = self.tasks.get(task_id)
-            if not task:
-                raise KeyError("NOT_FOUND")
-            if task.owner != user:
-                raise PermissionError("NOT_OWNER")
-            if task.status != "CLAIMED":
-                raise RuntimeError("INVALID_STATE")
-            task.owner = None
-            task.status = "OPEN"
-            return asdict(task)
-
-    def complete(self, task_id: int, user: str) -> dict:
-        with self.task_lock:
-            task = self.tasks.get(task_id)
-            if not task:
-                raise KeyError("NOT_FOUND")
-            if task.owner != user:
-                raise PermissionError("NOT_OWNER")
-            if task.status != "CLAIMED":
-                raise RuntimeError("INVALID_STATE")
-            task.status = "COMPLETED"
-            return asdict(task)
+    def run(self) -> None:
+        buffer = FrameBuffer()
+        user = "anonymous"
+        try:
+            while True:
+                data = self.sock.recv(4096)
+                if not data:
+                    break
+                for raw in buffer.feed(data):
+                    try:
+                        env = parse_envelope(raw)
+                        valid, code, message = validate_envelope(env)
+                        request_id = env.get("request_id", "")
+                        if not valid:
+                            send_all(self.sock, build_response(request_id, ok=False, error_code=code, message=message))
+                            continue
+                        payload = env.get("payload", {})
+                        user = payload.get("user", user)
+                        ok, result, error_code, message = self.application.handle(env["command"], payload, user)
+                        send_all(self.sock, build_response(request_id, result, ok=ok, error_code=error_code, message=message))
+                        if env["command"] == "QUIT":
+                            return
+                    except Exception as exc:
+                        self.logger.exception("session error: %s", exc)
+                        send_all(self.sock, build_response("", ok=False, error_code="SERVER_ERROR", message="internal server error"))
+        finally:
+            self.sock.close()

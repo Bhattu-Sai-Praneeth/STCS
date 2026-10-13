@@ -1,15 +1,54 @@
-import socket
-import threading
-from server.session import Session
+#pragma once
 
+#include <string>
 
-def serve(host: str, port: int, application, logger) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((host, port))
-        server.listen()
-        logger.info("listening on %s:%s", host, port)
-        while True:
-            client, address = server.accept()
-            logger.info("connection from %s", address)
-            threading.Thread(target=Session(client, application, logger).run, daemon=True).start()
+#include "server/logger.hpp"
+#include "server/session.hpp"
+#include "server/task_manager.hpp"
+#include "shared/framing.hpp"
+
+namespace stcs {
+
+class RequestDispatcher {
+public:
+    RequestDispatcher(TaskManager& tasks, SessionRegistry& sessions, Logger& logger);
+
+    std::string handle_frame(ClientSession& session, const Frame& frame);
+
+private:
+    struct HandlerResult {
+        bool ok = false;
+        Json payload = Json::object();
+        ProtocolError error;
+        std::string log_detail;
+
+        static HandlerResult success(Json payload, std::string log_detail = "");
+        static HandlerResult failure(ProtocolError error, std::string log_detail = "");
+    };
+
+    std::string handle_message(ClientSession& session, const std::string& line);
+    HandlerResult route(ClientSession& session, const Request& request);
+
+    HandlerResult on_hello(ClientSession& session, const Request& request);
+    HandlerResult on_help(const Request& request);
+    HandlerResult on_list_tasks(const Request& request);
+    HandlerResult on_create_task(ClientSession& session, const Request& request);
+    HandlerResult on_claim_task(ClientSession& session, const Request& request);
+    HandlerResult on_release_task(ClientSession& session, const Request& request);
+    HandlerResult on_complete_task(const Request& request);
+    HandlerResult on_delete_task(const Request& request);
+    HandlerResult on_quit(ClientSession& session, const Request& request);
+
+    static ProtocolError conflict_error(const char* what, const Task& task);
+    static ProtocolError not_found_error(long long task_id);
+
+    void log_frame_error(const std::string& session_id, const ProtocolError& error,
+                         const std::optional<std::string>& command_text = std::nullopt);
+    static std::string serialize(const Json& response);
+
+    TaskManager& tasks_;
+    SessionRegistry& sessions_;
+    Logger& logger_;
+};
+
+}

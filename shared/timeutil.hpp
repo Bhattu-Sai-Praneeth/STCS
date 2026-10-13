@@ -1,12 +1,17 @@
-// timeutil.hpp -- ISO-8601 UTC timestamps (Phase 1, 7.2: 2026-03-14T14:22:07Z).
-#pragma once
-
-#include <ctime>
-#include <string>
+#include "shared/timeutil.hpp"
 
 namespace stcs {
 
-std::string format_utc_timestamp(std::time_t when);
-std::string utc_timestamp_now();
+std::string format_utc_timestamp(std::time_t when) {
+    std::tm utc{};
+    gmtime_r(&when, &utc);
+    char buffer[32];
+    std::strftime(buffer, sizeof buffer, "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return buffer;
+}
 
-}  // namespace stcs
+std::string utc_timestamp_now() {
+    return format_utc_timestamp(std::time(nullptr));
+}
+
+}
