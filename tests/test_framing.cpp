@@ -1,8 +1,3 @@
-// test_framing.cpp -- unit tests for the framing layer (no sockets, no sleeps).
-//
-// These tests choose the exact chunk boundaries themselves, so they prove the
-// framer's behaviour for every way TCP could deliver the bytes (Phase 1,
-// T-13 and T-14, unit part).
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -17,8 +12,6 @@ using namespace stcs;
 
 namespace {
 
-// A realistic request containing multi-byte UTF-8 (so byte splits can land
-// inside a character).
 std::string sample_request(const std::string& id, const std::string& title) {
     Json payload = Json::object();
     payload.set("title", Json::text(title));
@@ -33,7 +26,7 @@ std::vector<Frame> drain(MessageFramer& framer) {
     return frames;
 }
 
-}  // namespace
+}  
 
 int main() {
     testing::run("T-13a", "one message fed one byte at a time: nothing until the newline", [] {
