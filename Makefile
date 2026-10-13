@@ -1,12 +1,3 @@
-# Makefile -- Shared Task Coordination Service (STCS), Phase 2
-#
-#   make            build bin/server and bin/client
-#   make tests      build the test programs (in build/)
-#   make check      build everything and run every test
-#   make clean      remove build products and runtime logs
-#
-# Requires: a C++17 compiler (g++ or clang++) and make. No other libraries.
-
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -g -Wall -Wextra -Wpedantic
 CPPFLAGS += -I. -MMD -MP
@@ -38,7 +29,6 @@ $(BIN)/client: $(BUILD)/client/main.o $(CLIENT_OBJ) $(SHARED_OBJ)
 	@mkdir -p $(BIN)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-# --- tests -------------------------------------------------------------
 tests: $(TEST_PROGRAMS)
 
 $(BUILD)/test_framing: $(BUILD)/tests/test_framing.o $(SHARED_OBJ)
@@ -53,7 +43,6 @@ $(BUILD)/test_integration: $(BUILD)/tests/test_integration.o $(SHARED_OBJ)
 check: all tests
 	sh tests/run_all.sh
 
-# --- generic rules -----------------------------------------------------
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
