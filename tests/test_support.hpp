@@ -1,10 +1,3 @@
-// test_support.hpp -- a tiny test harness (no external framework).
-//
-// Each test has an ID (a Phase 1 ID such as T-13 where one exists, otherwise
-// a Phase 2 ID such as U-12 or X-03), a one-line description and a function.
-// CHECK failures throw; the runner prints one PASS/FAIL line per test and the
-// program exits non-zero if any test failed. Results printed here are the
-// ones recorded in the Phase 2 test report.
 #pragma once
 
 #include <exception>
@@ -43,7 +36,7 @@ inline int summarize(const char* suite) {
     return failed_count() == 0 ? 0 : 1;
 }
 
-}  // namespace testing
+} 
 
 #define CHECK(condition)                                                              \
     do {                                                                              \
