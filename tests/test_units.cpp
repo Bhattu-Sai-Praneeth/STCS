@@ -1,8 +1,3 @@
-// test_units.cpp -- unit and in-process protocol tests (no sockets).
-//
-// Covers: JSON, field validation, envelope validation, TaskManager,
-// SessionRegistry, the request dispatcher (driven with Frames, exactly as the
-// server loop does), and the client's display and input-parsing code.
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -25,8 +20,6 @@ using namespace stcs;
 
 namespace {
 
-// ---- helpers for driving the dispatcher in-process -------------------------
-
 struct Rig {
     Logger logger;
     TaskManager tasks{[] { return std::string("2026-01-01T00:00:00Z"); }};
@@ -39,7 +32,6 @@ struct Rig {
         sessions.add(session.id());
     }
 
-    // Sends one request line and returns the parsed response.
     Json send(const std::string& line) {
         Frame frame;
         frame.status = FrameStatus::Message;
@@ -122,7 +114,6 @@ struct FailingTaskManager : TaskManager {
 }  // namespace
 
 int main() {
-    // ----------------------------------------------------------------- JSON
     testing::run("U-J1", "JSON round trip keeps key order and escapes control characters", [] {
         const std::string text = "{\"b\":1,\"a\":[true,false,null,\"x\\n\\u00e9\"],\"c\":{\"d\":-5}}";
         const Json json = parse_json(text);
@@ -153,7 +144,6 @@ int main() {
         CHECK(!parse_json("99999999999999999999").is_int());  // overflows 64 bits
     });
 
-    // ----------------------------------------------------------- validation
     testing::run("U-V1", "display name rules (1-24, letters digits space _ - .)", [] {
         std::string why;
         CHECK(validate_display_name("Ana", why));
@@ -177,7 +167,6 @@ int main() {
         CHECK(!validate_title("", out, why));
         CHECK(!validate_title("a\x01" "b", out, why));
         CHECK(!validate_title("a\x7F" "b", out, why));
-        // 120 multi-byte characters is still 120 characters (not 240 bytes).
         std::string accents;
         for (int i = 0; i < 120; ++i) accents += "\xC3\xA9";
         CHECK(validate_title(accents, out, why));
@@ -205,7 +194,6 @@ int main() {
         CHECK(!parse_task_id_text("99999999999999999999", id, why));
     });
 
-    // ------------------------------------------------------------- envelope
     testing::run("U-E1", "envelope: errors name the right code and recover request_id", [] {
         Request request;
         EnvelopeFailure failure;
@@ -251,7 +239,6 @@ int main() {
         CHECK(failure.error.code == ErrorCode::InvalidMessage);
     });
 
-    // --------------------------------------------------------- task manager
     testing::run("U-T1", "task manager: create assigns ids, OPEN, null owner, ascending list", [] {
         TaskManager tasks([] { return std::string("2026-01-01T00:00:00Z"); });
         const Task a = tasks.create_task("A", Priority::High, "Ana");
@@ -308,7 +295,6 @@ int main() {
         CHECK_EQ(tasks.list_tasks(TaskStatus::Done).size(), 1u);
     });
 
-    // ------------------------------------------------------ session registry
     testing::run("U-S1", "registry: unique session ids; NAME_IN_USE logic; name freed on removal", [] {
         SessionRegistry registry;
         const std::string s1 = registry.next_session_id();
@@ -324,7 +310,6 @@ int main() {
         CHECK_EQ(registry.active_count(), 1u);
     });
 
-    // ----------------------------------------------------------- dispatcher
     testing::run("T-01u", "dispatcher: HELLO returns session_id, server_version 1, 9 commands", [] {
         Rig rig;
         const Json r = rig.request("r1", "HELLO", "{\"display_name\":\"Ana\"}");
@@ -479,13 +464,11 @@ int main() {
         CHECK_EQ(one.find("payload")->find("commands")->items().size(), 1u);
     });
 
-    // ------------------------------------------------------- logger helper
     testing::run("U-L1", "logger sanitises client text (control characters, length)", [] {
         CHECK_EQ(Logger::sanitize("a\nb\x01" "c"), std::string("a?b?c"));
         CHECK_EQ(Logger::sanitize(std::string(100, 'x'), 10), std::string(10, 'x') + "...");
     });
 
-    // ----------------------------------------------------- client: display
     testing::run("U-C1", "client table fits in 80 columns (long titles, long owners, big ids)", [] {
         std::vector<Task> tasks;
         tasks.push_back(make_task(1, "Short"));
@@ -518,7 +501,6 @@ int main() {
         CHECK(!task_from_json(parse_json("[]"), task));
     });
 
-    // ------------------------------------------------ client: input parsing
     testing::run("U-C0", "client input: empty line is Empty; unknown verb is Invalid (local, no network)", [] {
         CHECK(parse_user_command("").kind == UserCommandKind::Empty);
         CHECK(parse_user_command("   \t ").kind == UserCommandKind::Empty);
