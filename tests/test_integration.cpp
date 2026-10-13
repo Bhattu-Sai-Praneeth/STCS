@@ -1,13 +1,3 @@
-// test_integration.cpp -- end-to-end tests over real TCP sockets.
-//
-// The test starts the real bin/server and bin/client programs as child
-// processes and talks to them. No test uses sleep(): the server is "ready"
-// when its "listening" log line has been read from its stdout pipe, and every
-// wait is a blocking read for an expected response or log line. The only
-// timeout is poll() inside read helpers, used purely as a watchdog so that a
-// broken build fails instead of hanging.
-//
-//   usage: test_integration [bin_dir]      (default: bin)
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -38,10 +28,6 @@ namespace {
 std::string g_bin_dir = "bin";
 constexpr int kWatchdogMs = 15000;
 
-// -------------------------------------------------------------- processes
-
-// A child process with stdout+stderr captured through one pipe and
-// (optionally) stdin fed through another.
 class Process {
 public:
     Process(const std::vector<std::string>& argv, bool pipe_stdin) {
@@ -75,7 +61,7 @@ public:
     }
 
     void write_stdin(const std::string& text) {
-        std::size_t done = 0;  // a pipe, not a socket: use write(), not send()
+        std::size_t done = 0;
         while (done < text.size()) {
             const ssize_t n = ::write(in_fd_, text.data() + done, text.size() - done);
             if (n < 0 && errno == EINTR) continue;
@@ -138,7 +124,6 @@ int find_free_port() {
     return ntohs(address.sin_port);
 }
 
-// A running STCS server. Ready means its "listening" line was printed.
 class ServerProcess {
 public:
     ServerProcess() : port_(find_free_port()) {
@@ -152,7 +137,6 @@ public:
     int port() const { return port_; }
     Process& process() { return *process_; }
 
-    // Blocks until the server has logged `text` (after anything already seen).
     void wait_for_log(const std::string& text) {
         if (!process_->read_until(text)) throw std::runtime_error("server log never showed: " + text);
     }
@@ -182,10 +166,6 @@ private:
     int exit_code_ = -1;
 };
 
-// ------------------------------------------------------------ test client
-
-// A raw TCP client: it can send arbitrary bytes in arbitrary pieces, and it
-// reads responses through the same framer the real client uses.
 class TestConn {
 public:
     explicit TestConn(int port) : framer_(kMaxResponseBytes) {
@@ -196,7 +176,7 @@ public:
         address.sin_port = htons(static_cast<uint16_t>(port));
         if (::connect(socket_.fd(), reinterpret_cast<sockaddr*>(&address), sizeof address) != 0)
             throw testing::Failure(std::string("connect failed: ") + std::strerror(errno));
-        const int one = 1;  // send small writes immediately: encourages real splits
+        const int one = 1; 
         ::setsockopt(socket_.fd(), IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     }
 
@@ -213,7 +193,6 @@ public:
                command + "\",\"payload\":" + payload + "}\n";
     }
 
-    // Next response line, parsed. Fails the test on timeout or EOF.
     Json read_response(std::string* raw_line = nullptr) {
         while (true) {
             Frame frame;
@@ -236,7 +215,6 @@ public:
         }
     }
 
-    // True if the next thing from the server is EOF (used after QUIT).
     bool next_is_eof() {
         char buffer[16];
         pollfd p{socket_.fd(), POLLIN, 0};
@@ -256,7 +234,7 @@ public:
         return call("hello", "HELLO", "{\"display_name\":\"" + name + "\"}");
     }
 
-    void abort_connection() {  // RST instead of FIN: simulates a crashed client
+    void abort_connection() { 
         linger hard{1, 0};
         ::setsockopt(socket_.fd(), SOL_SOCKET, SO_LINGER, &hard, sizeof hard);
         socket_.close_now();
@@ -268,7 +246,6 @@ private:
     MessageFramer framer_;
 };
 
-// ----------------------------------------------------------------- checks
 
 std::string status_of(const Json& r) { return r.find("status")->string_value(); }
 std::string code_of(const Json& r) {
@@ -285,7 +262,6 @@ bool no_internals(const Json& r) {
            text.find("stack") == std::string::npos && text.find("terminate") == std::string::npos;
 }
 
-// Runs the real client with scripted stdin and returns its merged output.
 struct ClientRun { std::string output; int exit_code; };
 ClientRun run_client(const std::vector<std::string>& args, const std::string& input) {
     std::vector<std::string> argv = {g_bin_dir + "/client"};
@@ -304,14 +280,13 @@ bool contains(const std::string& text, const std::string& part) {
     return text.find(part) != std::string::npos;
 }
 
-}  // namespace
+}  
 
 int main(int argc, char* argv[]) {
     if (argc > 1) g_bin_dir = argv[1];
     ::signal(SIGPIPE, SIG_IGN);
-    ::alarm(300);  // global watchdog for the whole run
-
-    // ============================================================ NORMAL
+    ::alarm(300);  
+    
     testing::run("T-01", "server start; connect; HELLO -> READY with session_id, version 1, commands", [] {
         ServerProcess server;
         TestConn client(server.port());
@@ -393,12 +368,11 @@ int main(int argc, char* argv[]) {
         CHECK_EQ(list_count(c, "l"), 1);
         r = c.call("q", "QUIT");
         CHECK_EQ(status_of(r), std::string("OK"));
-        CHECK(c.next_is_eof());                       // server closed the socket after the reply
+        CHECK(c.next_is_eof());                     
         server.wait_for_log("disconnected gracefully");
         server.wait_for_log("session released");
     });
 
-    // ============================================================ INVALID
     testing::run("T-05", "unknown command MAKE_COFFEE: UNKNOWN_COMMAND, next command still works", [] {
         ServerProcess server;
         TestConn c(server.port());
@@ -417,29 +391,29 @@ int main(int argc, char* argv[]) {
         c.hello("Ana");
         c.call("seed", "CREATE_TASK", "{\"title\":\"the only task\"}");
 
-        Json r = c.call("a", "CREATE_TASK", "{}");                                   // (a)
+        Json r = c.call("a", "CREATE_TASK", "{}");                                  
         CHECK_EQ(code_of(r), std::string("MISSING_FIELD"));
         CHECK_EQ(payload_of(r).find("field")->string_value(), std::string("title"));
         CHECK(no_internals(r));
-        r = c.call("b", "CREATE_TASK", "{\"title\":\"t\",\"priority\":\"URGENT\"}"); // (b)
+        r = c.call("b", "CREATE_TASK", "{\"title\":\"t\",\"priority\":\"URGENT\"}"); 
         CHECK_EQ(code_of(r), std::string("INVALID_FIELD"));
-        r = c.call("c", "CLAIM_TASK", "{\"task_id\":\"abc\"}");                      // (c)
+        r = c.call("c", "CLAIM_TASK", "{\"task_id\":\"abc\"}");                  
         CHECK_EQ(code_of(r), std::string("INVALID_FIELD"));
-        r = c.call("d", "CLAIM_TASK", "{\"task_id\":999}");                          // (d)
+        r = c.call("d", "CLAIM_TASK", "{\"task_id\":999}");                      
         CHECK_EQ(code_of(r), std::string("NOT_FOUND"));
         CHECK(no_internals(r));
 
-        c.send_raw("{\"version\":1,\n");                                              // (e)
+        c.send_raw("{\"version\":1,\n");                                    
         r = c.read_response();
         CHECK_EQ(code_of(r), std::string("INVALID_MESSAGE"));
         CHECK(r.find("request_id")->is_null());
-        c.send_raw("\n");                                                             // (f)
+        c.send_raw("\n");                                                     
         r = c.read_response();
         CHECK_EQ(code_of(r), std::string("INVALID_MESSAGE"));
 
         r = c.call("s", "LIST_TASKS", "{\"status\":\"INVALID\"}");
         CHECK_EQ(code_of(r), std::string("INVALID_FIELD"));
-        CHECK_EQ(list_count(c, "z"), 1);              // still exactly one, unchanged task
+        CHECK_EQ(list_count(c, "z"), 1);           
         c.call("q", "QUIT");
     });
 
@@ -486,14 +460,12 @@ int main(int argc, char* argv[]) {
         ServerProcess server;
         TestConn c(server.port());
         c.hello("Ana");
-        // One huge line, then a valid request, in a single send().
         c.send_raw(std::string(20000, 'A') + "\n" + TestConn::request_text("after", "LIST_TASKS"));
         Json r = c.read_response();
         CHECK_EQ(code_of(r), std::string("MESSAGE_TOO_LARGE"));
         r = c.read_response();                                   // the very next response ...
         CHECK_EQ(r.find("request_id")->string_value(), std::string("after"));  // ... is for the valid request
         CHECK_EQ(status_of(r), std::string("OK"));
-        // A long line that arrives without a newline for a while, then ends.
         c.send_raw(std::string(30000, 'B'));
         c.send_raw(std::string(30000, 'C') + "\n");
         CHECK_EQ(code_of(c.read_response()), std::string("MESSAGE_TOO_LARGE"));
@@ -517,26 +489,21 @@ int main(int argc, char* argv[]) {
         c.call("q", "QUIT");
     });
 
-    // ======================================================== FRAMING (TCP)
     testing::run("T-13", "partial message over TCP: processed once, only after the newline", [] {
         ServerProcess server;
         TestConn c(server.port());
         c.hello("Ana");
         const std::string wire = TestConn::request_text("split1", "CREATE_TASK",
                                                         "{\"title\":\"Test\",\"priority\":\"HIGH\"}");
-        // Phase 1 example: three pieces, the last being just the newline.
         const std::size_t cut = wire.find("\"command\"");
         c.send_raw(wire.substr(0, cut));
         c.send_raw(wire.substr(cut, wire.size() - 1 - cut));
         c.send_raw("\n");
         Json r = c.read_response();
-        // If the server had acted on a fragment, the first response here would
-        // be an INVALID_MESSAGE for that fragment instead of this reply.
+     
         CHECK_EQ(r.find("request_id")->string_value(), std::string("split1"));
         CHECK_EQ(status_of(r), std::string("OK"));
-        CHECK_EQ(list_count(c, "l1"), 1);              // exactly one task, no duplicates
-
-        // Split inside a multi-byte UTF-8 character.
+        CHECK_EQ(list_count(c, "l1"), 1);              /
         const std::string accented = TestConn::request_text("split2", "CREATE_TASK",
                                                             "{\"title\":\"Caf\xC3\xA9 \xE2\x9C\x93\"}");
         const std::size_t inside = accented.find("\xC3\xA9") + 1;   // between the 2 bytes of e-acute
@@ -546,7 +513,6 @@ int main(int argc, char* argv[]) {
         CHECK_EQ(r.find("request_id")->string_value(), std::string("split2"));
         CHECK_EQ(payload_of(r).find("task")->find("title")->string_value(), std::string("Caf\xC3\xA9 \xE2\x9C\x93"));
 
-        // Every byte as its own send().
         const std::string slow = TestConn::request_text("split3", "CREATE_TASK", "{\"title\":\"byte by byte\"}");
         for (char byte : slow) c.send_raw(std::string(1, byte));
         r = c.read_response();
@@ -583,7 +549,7 @@ int main(int argc, char* argv[]) {
         c.call("q", "QUIT");
     });
 
-    // ====================================================== NETWORK FAILURES
+
     testing::run("T-09", "client exits unexpectedly (RST, then plain close): logged, session released, server keeps listening", [] {
         ServerProcess server;
         {
@@ -599,7 +565,7 @@ int main(int argc, char* argv[]) {
             CHECK_EQ(status_of(next.hello("Ben")), std::string("OK"));
             const Json list = next.call("l", "LIST_TASKS");
             CHECK_EQ(payload_of(list).find("count")->int_value(), 1);   // the task is still there
-            next.close();                                          // plain close, also without QUIT
+            next.close();                                       
         }
         server.wait_for_log("sess-0002 session released");
         CHECK(server.log_contains("sess-0002 disconnected unexpectedly"));
@@ -700,7 +666,6 @@ int main(int argc, char* argv[]) {
         ::unlink("logs/test_dup.log");
     });
 
-    // ============================================================== CLIENT
     testing::run("T-07", "server not running: client reports failure clearly, exit 1, no crash", [] {
         const int port = find_free_port();             // nothing listens here
         const ClientRun run = run_client({"127.0.0.1", std::to_string(port), "Ana"}, "");
