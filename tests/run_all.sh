@@ -1,12 +1,4 @@
 #!/bin/sh
-# run_all.sh -- run every STCS Phase 2 test suite from the project root.
-#
-#   make check            (builds first, then runs this script)
-#   sh tests/run_all.sh   (if everything is already built)
-#
-# Output is one PASS/FAIL line per test plus a summary per suite; the exit
-# status is non-zero if any suite failed. The saved copy of a real run is
-# docs/test_results.txt.
 
 cd "$(dirname "$0")/.." || exit 1
 
